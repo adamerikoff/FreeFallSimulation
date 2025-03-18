@@ -8,6 +8,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
+mod pipeline_builder;
+use pipeline_builder::PipelineBuilder;
+
 pub async fn run() {
     let event_loop = EventLoop::new().unwrap();
 
@@ -28,14 +31,21 @@ impl StateApplication {
 impl ApplicationHandler for StateApplication {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = event_loop
-            .create_window(Window::default_attributes()
-            .with_inner_size(PhysicalSize::new(2800, 1800))
-            .with_title("FreeFallSimulation"))
+            .create_window(
+                Window::default_attributes()
+                    .with_inner_size(PhysicalSize::new(2800, 1800))
+                    .with_title("FreeFallSimulation"),
+            )
             .unwrap();
         self.state = Some(State::new(window));
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, window_id: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
         let window = self.state.as_ref().unwrap().window();
 
         if window.id() == window_id {
@@ -67,6 +77,7 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     window: Arc<Window>,
+    render_pipeline: wgpu::RenderPipeline,
 }
 
 impl State {
@@ -80,7 +91,10 @@ impl State {
         let surface_caps = surface.get_capabilities(&adapter);
         let config = Self::create_surface_config(size, surface_caps);
         surface.configure(&device, &config);
-        
+        let mut pipeline_builder = PipelineBuilder::new();
+        pipeline_builder.set_shader_module("shader.wgsl", "vs_main", "fs_main");
+        let render_pipeline = pipeline_builder.build_pipeline(&device);
+
         Self {
             surface,
             device,
@@ -88,10 +102,14 @@ impl State {
             config,
             size,
             window: window_arc,
+            render_pipeline,
         }
     }
 
-    fn create_surface_config(size: PhysicalSize<u32>, capabilities: SurfaceCapabilities) -> wgpu::SurfaceConfiguration {
+    fn create_surface_config(
+        size: PhysicalSize<u32>,
+        capabilities: SurfaceCapabilities,
+    ) -> wgpu::SurfaceConfiguration {
         let surface_format = capabilities
             .formats
             .iter()
@@ -156,41 +174,49 @@ impl State {
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture().unwrap();
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let drawable = self.surface.get_current_texture().unwrap();
+        let image_view_descriptor = wgpu::TextureViewDescriptor::default();
+        let image_view = drawable.texture.create_view(&image_view_descriptor);
 
-        let mut encoder = self
+        let command_encoder_descriptor = wgpu::CommandEncoderDescriptor {
+            label: Some("Render Encoder"),
+        };
+
+        let mut command_encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
+            .create_command_encoder(&command_encoder_descriptor);
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let color_attachment = wgpu::RenderPassColorAttachment {
+                view: &image_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 0.0,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            };
+
+            let render_pass_descriptor = wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 1.0,
-                            g: 0.2,
-                            b: 0.3,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[Some(color_attachment)],
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
-            });
+            };
+
+            let mut render_pass = command_encoder.begin_render_pass(&render_pass_descriptor);
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.draw(0..3, 0..1);
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
+        self.queue.submit(std::iter::once(command_encoder.finish()));
+
+        drawable.present();
 
         Ok(())
     }
