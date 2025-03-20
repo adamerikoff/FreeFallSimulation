@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use pollster::{block_on, FutureExt};
-use renderer_backend::mesh_builder;
+use renderer_backend::mesh_builder::{self, Mesh};
 use wgpu::{Adapter, Device, Instance, PresentMode, Queue, Surface, SurfaceCapabilities};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -80,7 +80,8 @@ struct State {
     size: PhysicalSize<u32>,
     window: Arc<Window>,
     render_pipeline: wgpu::RenderPipeline,
-    triangle_mesh: wgpu::Buffer
+    triangle_mesh: wgpu::Buffer,
+    quad_mesh: Mesh,
 }
 
 impl State {
@@ -96,6 +97,7 @@ impl State {
         surface.configure(&device, &config);
 
         let triangle_mesh = mesh_builder::make_triangle(&device);
+        let quad_mesh = mesh_builder::make_quad(&device);
 
 
         let mut pipeline_builder = PipelineBuilder::new();
@@ -112,7 +114,8 @@ impl State {
             size,
             window: window_arc,
             render_pipeline,
-            triangle_mesh
+            triangle_mesh,
+            quad_mesh
         }
     }
 
@@ -221,8 +224,13 @@ impl State {
         {
             let mut render_pass = command_encoder.begin_render_pass(&render_pass_descriptor);
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_vertex_buffer(0, self.triangle_mesh.slice(..));
-            render_pass.draw(0..3, 0..1);
+
+            render_pass.set_vertex_buffer(0, self.quad_mesh.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.quad_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..6, 0, 0..1);
+
+            // render_pass.set_vertex_buffer(0, self.triangle_mesh.slice(..));
+            // render_pass.draw(0..3, 0..1);
         }
 
         self.queue.submit(std::iter::once(command_encoder.finish()));
