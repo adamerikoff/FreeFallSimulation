@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use pollster::{block_on, FutureExt};
+use renderer_backend::mesh_builder;
 use wgpu::{Adapter, Device, Instance, PresentMode, Queue, Surface, SurfaceCapabilities};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
@@ -8,8 +9,9 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-mod pipeline_builder;
-use pipeline_builder::PipelineBuilder;
+mod renderer_backend;
+
+use renderer_backend::pipeline_builder::PipelineBuilder;
 
 pub async fn run() {
     let event_loop = EventLoop::new().unwrap();
@@ -78,6 +80,7 @@ struct State {
     size: PhysicalSize<u32>,
     window: Arc<Window>,
     render_pipeline: wgpu::RenderPipeline,
+    triangle_mesh: wgpu::Buffer
 }
 
 impl State {
@@ -91,8 +94,14 @@ impl State {
         let surface_caps = surface.get_capabilities(&adapter);
         let config = Self::create_surface_config(size, surface_caps);
         surface.configure(&device, &config);
+
+        let triangle_mesh = mesh_builder::make_triangle(&device);
+
+
         let mut pipeline_builder = PipelineBuilder::new();
+        pipeline_builder.add_buffer_layout(mesh_builder::Vertex::get_layout());
         pipeline_builder.set_shader_module("shader.wgsl", "vs_main", "fs_main");
+        pipeline_builder.set_pixel_format(config.format);
         let render_pipeline = pipeline_builder.build_pipeline(&device);
 
         Self {
@@ -103,6 +112,7 @@ impl State {
             size,
             window: window_arc,
             render_pipeline,
+            triangle_mesh
         }
     }
 
@@ -185,32 +195,33 @@ impl State {
         let mut command_encoder = self
             .device
             .create_command_encoder(&command_encoder_descriptor);
+
+        let color_attachment = wgpu::RenderPassColorAttachment {
+            view: &image_view,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 0.0,
+                    a: 1.0,
+                }),
+                store: wgpu::StoreOp::Store,
+            },
+        };
+
+        let render_pass_descriptor = wgpu::RenderPassDescriptor {
+            label: Some("Render Pass"),
+            color_attachments: &[Some(color_attachment)],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        };
+
         {
-            let color_attachment = wgpu::RenderPassColorAttachment {
-                view: &image_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 1.0,
-                        g: 1.0,
-                        b: 0.0,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            };
-
-            let render_pass_descriptor = wgpu::RenderPassDescriptor {
-                label: Some("Render Pass"),
-                color_attachments: &[Some(color_attachment)],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            };
-
             let mut render_pass = command_encoder.begin_render_pass(&render_pass_descriptor);
-
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_vertex_buffer(0, self.triangle_mesh.slice(..));
             render_pass.draw(0..3, 0..1);
         }
 
