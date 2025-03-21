@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use pollster::{block_on, FutureExt};
+use renderer_backend::material::Material;
+use renderer_backend::{bind_group_layout, pipeline};
 use renderer_backend::mesh_builder::{self, Mesh};
 use wgpu::{Adapter, Device, Instance, PresentMode, Queue, Surface, SurfaceCapabilities};
 use winit::application::ApplicationHandler;
@@ -10,8 +12,6 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
 mod renderer_backend;
-
-use renderer_backend::pipeline_builder::PipelineBuilder;
 
 pub async fn run() {
     let event_loop = EventLoop::new().unwrap();
@@ -82,6 +82,8 @@ struct State {
     render_pipeline: wgpu::RenderPipeline,
     triangle_mesh: wgpu::Buffer,
     quad_mesh: Mesh,
+    triangle_material: Material,
+    quad_material: Material,
 }
 
 impl State {
@@ -99,12 +101,25 @@ impl State {
         let triangle_mesh = mesh_builder::make_triangle(&device);
         let quad_mesh = mesh_builder::make_quad(&device);
 
+        let material_bind_group_layout: wgpu::BindGroupLayout;
+        {
+            let mut builder = bind_group_layout::Builder::new(&device);
+            builder.add_material();
+            material_bind_group_layout = builder.build("Material Bind Group Layout");
+        }
 
-        let mut pipeline_builder = PipelineBuilder::new();
-        pipeline_builder.add_buffer_layout(mesh_builder::Vertex::get_layout());
-        pipeline_builder.set_shader_module("shader.wgsl", "vs_main", "fs_main");
-        pipeline_builder.set_pixel_format(config.format);
-        let render_pipeline = pipeline_builder.build_pipeline(&device);
+        let render_pipeline: wgpu::RenderPipeline;
+        {
+            let mut builder = pipeline::Builder::new(&device);
+            builder.set_shader_module("shader.wgsl", "vs_main", "fs_main");
+            builder.set_pixel_format(config.format);
+            builder.add_vertex_buffer_layout(mesh_builder::Vertex::get_layout());
+            builder.add_bind_group_layout(&material_bind_group_layout);
+            render_pipeline = builder.build("Render Pipeline");
+        }
+
+        let triangle_material = Material::new("../img/winry.png", &device, &queue, "Triangle Material", &material_bind_group_layout);
+        let quad_material = Material::new("../img/satin.png", &device, &queue, "Quad Material", &material_bind_group_layout);
 
         Self {
             surface,
@@ -115,7 +130,9 @@ impl State {
             window: window_arc,
             render_pipeline,
             triangle_mesh,
-            quad_mesh
+            quad_mesh,
+            triangle_material,
+            quad_material
         }
     }
 
@@ -222,15 +239,17 @@ impl State {
         };
 
         {
-            let mut render_pass = command_encoder.begin_render_pass(&render_pass_descriptor);
-            render_pass.set_pipeline(&self.render_pipeline);
+            let mut renderpass = command_encoder.begin_render_pass(&render_pass_descriptor);
+            renderpass.set_pipeline(&self.render_pipeline);
 
-            render_pass.set_vertex_buffer(0, self.quad_mesh.vertex_buffer.slice(..));
-            render_pass.set_index_buffer(self.quad_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..6, 0, 0..1);
+            renderpass.set_bind_group(0, &self.quad_material.bind_group, &[]);
+            renderpass.set_vertex_buffer(0, self.quad_mesh.vertex_buffer.slice(..));
+            renderpass.set_index_buffer(self.quad_mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            renderpass.draw_indexed(0..6, 0, 0..1);
 
-            // render_pass.set_vertex_buffer(0, self.triangle_mesh.slice(..));
-            // render_pass.draw(0..3, 0..1);
+            renderpass.set_bind_group(0, &self.triangle_material.bind_group, &[]);
+            renderpass.set_vertex_buffer(0, self.triangle_mesh.slice(..));
+            renderpass.draw(0..3, 0..1);
         }
 
         self.queue.submit(std::iter::once(command_encoder.finish()));

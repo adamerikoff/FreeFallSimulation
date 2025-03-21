@@ -11,7 +11,6 @@ impl Vertex {
 
         const ATTRIBUTES: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
 
-
         wgpu::VertexBufferLayout { 
             array_stride: std::mem::size_of::<Vertex>() as u64, 
             step_mode: wgpu::VertexStepMode::Vertex, 
